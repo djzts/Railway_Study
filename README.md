@@ -33,6 +33,13 @@ python -X utf8 tools/build_data.py "F:\Obsidian_vault\Train_dispatch\Train_dispa
 
 `plan.js` 和 `quiz.js` 是手写的，要和知识库里的 `MOC/6周学习计划.md` 保持一致。
 
+## 发布
+GitHub Pages 发布的是 `gh-pages` 分支。改完后两个分支一起推：
+
+```bash
+git push origin main main:gh-pages
+```
+
 ## 本地预览
 ```bash
 python -m http.server 8000
