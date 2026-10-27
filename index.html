@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>铁路调度 6 周学习计划</title>
+  <meta name="description" content="铁路调度指挥及机车机班管理：每天先学内容，再做测试，错题自动进错题本。">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232563eb'/%3E%3Cpath d='M18 44h28M22 44l-4 8M42 44l4 8M20 14h24a4 4 0 0 1 4 4v18a6 6 0 0 1-6 6H22a6 6 0 0 1-6-6V18a4 4 0 0 1 4-4zM16 28h32' stroke='white' stroke-width='4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/">🚄 铁路调度 6 周学习</a>
+    <nav class="nav">
+      <a href="#/" data-nav="home">首页</a>
+      <a href="#/today" data-nav="today">今天</a>
+      <a href="#/wrong" data-nav="wrong">错题本 <span class="count" id="wrong-count"></span></a>
+      <a href="#/notes" data-nav="notes">知识库</a>
+      <a href="#/settings" data-nav="settings">设置</a>
+    </nav>
+  </header>
+
+  <main id="app" class="container">
+    <p class="loading">加载中……</p>
+  </main>
+
+  <footer class="footer container">
+    <p>内容来自个人学习笔记（教材、论文、公众号文章的摘要）。标有"Claude 补充，待核实"的部分不是资料原文，请以官方规章为准。车次字头一律按新版车次规定。</p>
+    <p>学习进度和错题本只保存在当前浏览器里，换设备请在"设置"里导出、导入。</p>
+  </footer>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+  <script defer src="data/plan.js"></script>
+  <script defer src="data/quiz.js"></script>
+  <script defer src="data/notes.js"></script>
+  <script defer src="data/exams.js"></script>
+  <script defer src="assets/app.js"></script>
+</body>
+</html>
