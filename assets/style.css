@@ -282,3 +282,15 @@ pre.plain { white-space: pre-wrap; font: inherit; margin: 0; }
   h1 { font-size: 22px; }
   .card { padding: 14px 14px; }
 }
+
+/* ---------- sync ---------- */
+.sync { display: inline-block; padding: 0 6px; border-radius: 9px; font-size: 12px; line-height: 18px; background: var(--surface-2); color: var(--muted); }
+.sync.ok { background: var(--ok-soft); color: var(--ok); }
+.sync.busy { background: var(--info-soft); color: var(--info); }
+.sync.error { background: var(--bad-soft); color: var(--bad); }
+.field { display: grid; grid-template-columns: 110px 1fr; gap: 8px 12px; align-items: center; margin: 10px 0; }
+.field input { width: 100%; }
+@media (max-width: 560px) { .field { grid-template-columns: 1fr; } }
+input[type="password"] { padding: 8px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); font: inherit; font-size: 15px; }
+.sync-log { font-size: 13px; color: var(--muted); margin-top: 8px; }
+.sync-log.error { color: var(--bad); }

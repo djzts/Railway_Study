@@ -11,6 +11,7 @@
 - **错题本**：在不同的两天各做对一次算掌握；可以导出成 Obsidian 错题本的表格格式
 - **知识库**：全部概念笔记、资料笔记和术语表，可搜索
 - 进度保存在浏览器 localStorage；在"设置"里可以导出 / 导入
+- **同步到 GitHub**：在"设置"里填一个仓库和 fine-grained Token 后，进度一有变化约 10 秒自动提交到仓库里的 `progress.json`，切走或关闭页面时也会提交；多台设备按条目三方合并（见下文）
 
 ## 目录
 | 路径 | 内容 |
@@ -39,6 +40,13 @@ GitHub Pages 发布的是 `gh-pages` 分支。改完后两个分支一起推：
 ```bash
 git push origin main main:gh-pages
 ```
+
+## 进度同步
+- 建议单独建一个**私有**仓库（如 `Railway_Study_progress`）放进度，不要用本仓库：本仓库是公开的，而且能写本仓库的 Token 也能改网站
+- Token 用 fine-grained token，只授权进度仓库，权限只给 Contents: Read and write，设过期时间
+- Token 只存在浏览器 localStorage 里，只发给 `api.github.com`，不会写进进度文件
+- 合并规则：记住上次同步时两边一致的版本（base），按 `days[n]`、`exams[key]`、`wrong[id]` 逐条比较；只有一边改了就取那一边，两边都改了同一条就取较新的一边
+- 第三方库（marked、KaTeX、Mermaid）带 SRI 校验，CDN 上的文件被改动时浏览器会拒绝加载
 
 ## 本地预览
 ```bash

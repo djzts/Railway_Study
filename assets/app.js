@@ -71,14 +71,194 @@
   function save() {
     clearTimeout(saveTimer);
     saveTimer = null;
+    S.updatedAt = Date.now();
+    writeLocal();
+    updateWrongCount();
+    scheduleSync();
+  }
+  function writeLocal() {
     try { localStorage.setItem(KEY, JSON.stringify(S)); }
     catch (e) { if (!saveWarned) { saveWarned = true; toast('浏览器不允许保存，刷新后进度会丢失'); } }
-    updateWrongCount();
   }
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(save, 400); }
   function flush() { if (saveTimer) save(); }
   const dayState = n => S.days[n] || (S.days[n] = {});
   const examState = k => S.exams[k] || (S.exams[k] = {});
+
+  // ---------- 同步到 GitHub 仓库 ----------
+  // 用 GitHub Contents API 读写仓库里的进度文件。Token 只存在本机浏览器里，不写进进度文件。
+  // 合并用三方合并：base 是上次同步时两边一致的版本，按 days[n] / exams[k] / wrong[id] 逐条比较。
+  const SYNC_KEY = 'railway-study-sync';
+  const BASE_KEY = 'railway-study-v1-base';
+  const SYNC_DELAY = 10000;
+  function readJSON(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }
+  function writeJSON(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* 存不了就算了 */ } }
+
+  let syncCfg = readJSON(SYNC_KEY) || {};
+  let syncInfo = { status: 'off', msg: '', at: null };
+  let syncTimer = null, syncBusy = false, syncAgain = false, lastSyncAt = 0;
+
+  const syncOn = () => !!(syncCfg.token && /^[\w.-]+\/[\w.-]+$/.test(syncCfg.repo || ''));
+  const syncTarget = () => [syncCfg.repo, syncCfg.branch || '', syncCfg.path || 'progress.json'].join('|');
+  const coreOf = s => ({ start: s.start, days: s.days || {}, exams: s.exams || {}, wrong: s.wrong || {} });
+  const same = (a, b) => JSON.stringify(coreOf(a)) === JSON.stringify(coreOf(b));
+  function readBase() { const b = readJSON(BASE_KEY); return b && b.target === syncTarget() ? b.state : {}; }
+  function writeBase(state) { writeJSON(BASE_KEY, { target: syncTarget(), state: coreOf(state) }); }
+
+  function merge3(base, local, remote) {
+    const localNewer = (local.updatedAt || 0) >= (remote.updatedAt || 0);
+    const pick = (b, l, r) => {
+      const bs = JSON.stringify(b), ls = JSON.stringify(l), rs = JSON.stringify(r);
+      if (ls === rs || rs === bs) return l;
+      if (ls === bs) return r;
+      return localNewer ? l : r; // 两边都改了同一条：取较新的一边
+    };
+    const out = { start: pick(base.start, local.start, remote.start) || PLAN.start, days: {}, exams: {}, wrong: {}, updatedAt: Math.max(local.updatedAt || 0, remote.updatedAt || 0) };
+    ['days', 'exams', 'wrong'].forEach(sec => {
+      const b = base[sec] || {}, l = local[sec] || {}, r = remote[sec] || {};
+      new Set([...Object.keys(b), ...Object.keys(l), ...Object.keys(r)]).forEach(k => {
+        const v = pick(b[k], l[k], r[k]);
+        if (v !== undefined) out[sec][k] = v;
+      });
+    });
+    return out;
+  }
+
+  function b64encode(str) {
+    const bytes = new TextEncoder().encode(str);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+  function b64decode(b64) {
+    const bin = atob(String(b64).replace(/\s/g, ''));
+    return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+  }
+
+  async function ghApi(method, path, body, keepalive) {
+    const headers = { Authorization: 'Bearer ' + syncCfg.token, Accept: 'application/vnd.github+json' };
+    if (body) headers['Content-Type'] = 'application/json';
+    const res = await fetch('https://api.github.com' + path, { method, headers, cache: 'no-store', keepalive: !!keepalive, body: body ? JSON.stringify(body) : undefined });
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* 没有正文 */ }
+    return { status: res.status, ok: res.ok, data, message: (data && data.message) || res.statusText };
+  }
+  const repoPath = () => '/repos/' + syncCfg.repo;
+  const filePath = () => repoPath() + '/contents/' + (syncCfg.path || 'progress.json').split('/').map(encodeURIComponent).join('/');
+  function apiError(r) {
+    if (r.status === 401) return 'Token 无效或已过期';
+    if (r.status === 403 && /rate limit/i.test(r.message)) return 'GitHub 接口调用太频繁，稍后会再试';
+    if (r.status === 403) return 'Token 没有写这个仓库的权限（需要 Contents: Read and write）';
+    if (r.status === 404) return '找不到仓库或分支：检查仓库名，以及 Token 有没有授权这个仓库';
+    return `GitHub 返回 ${r.status}：${r.message}`;
+  }
+
+  async function syncPull() {
+    const q = syncCfg.branch ? '?ref=' + encodeURIComponent(syncCfg.branch) : '';
+    const r = await ghApi('GET', filePath() + q);
+    if (r.status === 404) return null; // 第一次同步时文件还不存在；仓库不存在的情况推送时会报错
+    if (!r.ok) throw new Error(apiError(r));
+    return { sha: r.data.sha, state: JSON.parse(b64decode(r.data.content)) };
+  }
+  async function createBranch() {
+    const repo = await ghApi('GET', repoPath());
+    if (!repo.ok) throw new Error(apiError(repo));
+    const ref = await ghApi('GET', `${repoPath()}/git/ref/heads/${encodeURIComponent(repo.data.default_branch)}`);
+    if (!ref.ok) throw new Error(apiError(ref));
+    const made = await ghApi('POST', `${repoPath()}/git/refs`, { ref: 'refs/heads/' + syncCfg.branch, sha: ref.data.object.sha });
+    if (!made.ok) throw new Error(apiError(made));
+  }
+  async function syncPush(text, sha, keepalive) {
+    const now = new Date();
+    const body = { message: `学习进度 ${today()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`, content: b64encode(text) };
+    if (syncCfg.branch) body.branch = syncCfg.branch;
+    if (sha) body.sha = sha;
+    let r = await ghApi('PUT', filePath(), body, keepalive);
+    if (!r.ok && !keepalive && syncCfg.branch && /branch/i.test(r.message)) {
+      await createBranch();
+      r = await ghApi('PUT', filePath(), body);
+    }
+    if (r.status === 409 || (r.status === 422 && /sha/i.test(r.message))) return { conflict: true };
+    if (!r.ok) throw new Error(apiError(r));
+    return { sha: r.data.content.sha };
+  }
+  function fileText(state) {
+    return JSON.stringify(Object.assign({ app: 'railway-study', version: 1, updatedAt: state.updatedAt || Date.now() }, coreOf(state)), null, 1);
+  }
+
+  async function syncNow() {
+    if (!syncOn()) return;
+    if (syncBusy) { syncAgain = true; return; }
+    syncBusy = true;
+    clearTimeout(syncTimer);
+    setSync('busy', '同步中…');
+    let changed = false;
+    try {
+      for (let tries = 0; ; tries++) {
+        const remote = await syncPull();
+        if (remote) syncCfg.sha = remote.sha;
+        const merged = remote ? merge3(readBase(), S, remote.state) : S;
+        const text = fileText(merged);
+        const snap = JSON.parse(text); // 快照：等待网络期间的新改动不会混进这次的 base
+        if (!same(snap, S)) { S = Object.assign(blank(), JSON.parse(text)); writeLocal(); updateWrongCount(); changed = true; }
+        if (remote && same(snap, remote.state)) { writeBase(snap); break; }
+        const res = await syncPush(text, remote && remote.sha);
+        if (res.conflict) {
+          if (tries < 2) continue;
+          throw new Error('别的设备也在同步，稍后再试');
+        }
+        syncCfg.sha = res.sha;
+        writeBase(snap);
+        break;
+      }
+      writeJSON(SYNC_KEY, syncCfg);
+      lastSyncAt = Date.now();
+      setSync('ok', '已同步');
+      if (changed) { toast('已合并仓库里的进度'); route(); }
+    } catch (e) {
+      setSync('error', e.message || String(e));
+    }
+    syncBusy = false;
+    if (syncAgain) { syncAgain = false; scheduleSync(1000); }
+  }
+  function scheduleSync(delay) {
+    if (!syncOn()) return;
+    clearTimeout(syncTimer);
+    if (!syncBusy) setSync('wait', '有改动，稍后自动同步');
+    syncTimer = setTimeout(syncNow, delay == null ? SYNC_DELAY : delay);
+  }
+  // 页面切走或关闭时，把还没同步的改动直接推上去（keepalive 请求在页面关闭后也会发出）
+  function syncOnHide() {
+    flush();
+    if (!syncOn() || syncBusy || same(S, readBase())) return;
+    clearTimeout(syncTimer);
+    const text = fileText(S), snap = JSON.parse(text);
+    syncPush(text, syncCfg.sha, true).then(res => {
+      if (res && res.sha) { syncCfg.sha = res.sha; writeJSON(SYNC_KEY, syncCfg); writeBase(snap); lastSyncAt = Date.now(); setSync('ok', '已同步'); }
+      else scheduleSync(1000);
+    }).catch(() => scheduleSync(1000));
+  }
+  function setSync(status, msg) {
+    syncInfo = { status, msg, at: status === 'ok' ? new Date() : syncInfo.at };
+    const b = $('#sync-status');
+    if (b) {
+      b.hidden = !syncOn() && status !== 'error';
+      b.className = 'sync ' + ({ ok: 'ok', busy: 'busy', error: 'error' }[status] || '');
+      b.textContent = { ok: '✓', busy: '↻', wait: '…', error: '!' }[status] || '';
+      b.title = '同步到 GitHub：' + msg;
+    }
+    const log = $('#sync-log');
+    if (log) {
+      log.className = 'sync-log' + (status === 'error' ? ' error' : '');
+      log.innerHTML = syncLogHTML();
+    }
+  }
+  function syncLogHTML() {
+    if (!syncOn()) return '还没有连上仓库。';
+    const at = syncInfo.at ? `上次同步：${syncInfo.at.getHours()}:${String(syncInfo.at.getMinutes()).padStart(2, '0')}。` : '';
+    const url = `https://github.com/${syncCfg.repo}/blob/${encodeURIComponent(syncCfg.branch || 'HEAD')}/${(syncCfg.path || 'progress.json').split('/').map(encodeURIComponent).join('/')}`;
+    return `${esc(syncInfo.msg)}　${at}<a href="${esc(url)}" target="_blank" rel="noopener">在 GitHub 上查看进度文件</a>`;
+  }
 
   function examScore(key) {
     const es = S.exams[key] || {};
@@ -1108,8 +1288,27 @@
       <div class="card"><h3 style="margin-top:0">导出 / 导入进度</h3>
         <p class="muted small">学习进度和错题本只存在这个浏览器里。换电脑或换浏览器前先导出，再在新设备上导入。</p>
         <div class="row"><button class="btn" data-action="export-json">导出进度（JSON 文件）</button><label class="btn">导入进度<input type="file" id="import" accept=".json,application/json" hidden></label></div></div>
+      <div class="card" id="sync-card"><h3 style="margin-top:0">同步到 GitHub 仓库</h3>
+        <p class="small">连上以后，进度一有变化，大约 10 秒后自动提交到仓库里的进度文件；关闭或切走页面时也会马上提交。在别的电脑或手机上填同样的设置，两边的进度会自动合并。</p>
+        <div class="field">
+          <label for="sync-repo">仓库</label><input type="text" id="sync-repo" placeholder="用户名/仓库名，如 djzts/Railway_Study_progress" value="${esc(syncCfg.repo || '')}" autocomplete="off" spellcheck="false">
+          <label for="sync-branch">分支</label><input type="text" id="sync-branch" placeholder="留空 = 仓库的默认分支" value="${esc(syncCfg.branch || '')}" autocomplete="off" spellcheck="false">
+          <label for="sync-path">文件</label><input type="text" id="sync-path" placeholder="progress.json" value="${esc(syncCfg.path || '')}" autocomplete="off" spellcheck="false">
+          <label for="sync-token">Token</label><input type="password" id="sync-token" placeholder="${syncCfg.token ? '已保存（不显示）；留空就不改' : 'github_pat_……'}" autocomplete="off">
+        </div>
+        <div class="row"><button class="btn primary" data-action="sync-save">保存并同步</button><button class="btn" data-action="sync-now" ${syncOn() ? '' : 'disabled'}>立即同步</button><button class="btn bad" data-action="sync-off" ${syncCfg.token ? '' : 'disabled'}>断开（删除本机 Token）</button></div>
+        <div class="sync-log ${syncInfo.status === 'error' ? 'error' : ''}" id="sync-log">${syncLogHTML()}</div>
+        <details class="small" style="margin-top:10px"><summary>第一次设置看这里</summary>
+          <ol>
+            <li>在 GitHub 上新建一个<b>私有</b>仓库，比如 <code>Railway_Study_progress</code>。<br><span class="muted">不建议用网站本身的公开仓库：公开仓库里的进度（包括你写的答案）谁都能看到；而且能写网站仓库的 Token 一旦泄露，别人就能改你的网站。</span></li>
+            <li>打开 <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub → Settings → Developer settings → Fine-grained tokens</a>，新建一个 Token：Repository access 选 <b>Only select repositories</b>，只选这个进度仓库；Permissions 里只把 <b>Contents</b> 设成 <b>Read and write</b>；设一个过期时间（比如 90 天）。</li>
+            <li>把 Token 和仓库名（<code>用户名/仓库名</code>）填到上面，点"保存并同步"。分支和文件可以留空。</li>
+            <li>换设备时，在新设备上填同样的设置（也可以再建一个 Token），两边的进度会自动合并。</li>
+          </ol>
+          <p class="muted">Token 只保存在这个浏览器里，只发给 GitHub，不会写进进度文件。在公用电脑上用完记得点"断开"。</p>
+        </details></div>
       <div class="card"><h3 style="margin-top:0">清空进度</h3>
-        <p class="muted small">删除这个浏览器里的全部学习记录和错题本，不能撤销。建议先导出。</p>
+        <p class="muted small">删除这个浏览器里的全部学习记录和错题本，不能撤销。建议先导出。连着 GitHub 时，仓库里的进度文件也会被清空（仓库的提交历史里还能找回）。</p>
         <button class="btn bad" data-action="reset-all">清空全部进度</button></div>
       <div class="card"><h3 style="margin-top:0">关于</h3>
         <p class="small">${Object.keys(NOTES).length} 篇笔记 · ${qn} 道每日测试题 · ${Object.keys(EXAMS).length} 份试卷。内容由 Obsidian 知识库生成，车次字头按新版车次规定。</p></div>`;
@@ -1130,6 +1329,33 @@
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    };
+    actions['sync-save'] = () => {
+      const repo = $('#sync-repo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/+$/, '');
+      const branch = $('#sync-branch').value.trim();
+      const path = $('#sync-path').value.trim().replace(/^\/+/, '');
+      const token = $('#sync-token').value.trim();
+      if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) { toast('仓库要写成 用户名/仓库名'); return; }
+      if (!token && !syncCfg.token) { toast('请填 Token'); return; }
+      const targetChanged = repo !== syncCfg.repo || branch !== (syncCfg.branch || '') || path !== (syncCfg.path || '');
+      syncCfg = { repo, branch, path, token: token || syncCfg.token, sha: targetChanged ? null : syncCfg.sha };
+      writeJSON(SYNC_KEY, syncCfg);
+      $('#sync-token').value = '';
+      $('#sync-token').placeholder = '已保存（不显示）；留空就不改';
+      $$('#sync-card button').forEach(b => { b.disabled = false; });
+      syncNow();
+    };
+    actions['sync-now'] = () => syncNow();
+    actions['sync-off'] = () => {
+      if (!confirm('断开后不再自动同步，这个浏览器里的 Token 会删除。仓库里的进度文件不受影响。确定？')) return;
+      clearTimeout(syncTimer);
+      syncCfg = { repo: syncCfg.repo, branch: syncCfg.branch, path: syncCfg.path };
+      writeJSON(SYNC_KEY, syncCfg);
+      try { localStorage.removeItem(BASE_KEY); } catch (e) { /* 忽略 */ }
+      setSync('off', '已断开');
+      $('#sync-token').placeholder = 'github_pat_……';
+      $('[data-action="sync-now"]').disabled = true;
+      $('[data-action="sync-off"]').disabled = true;
     };
     actions['reset-all'] = () => {
       if (!confirm('确定清空全部学习进度和错题本？不能撤销。')) return;
@@ -1164,6 +1390,11 @@
   setupLibs();
   updateWrongCount();
   window.addEventListener('hashchange', route);
-  window.addEventListener('pagehide', flush);
+  window.addEventListener('pagehide', syncOnHide);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') syncOnHide();
+    else if (syncOn() && Date.now() - lastSyncAt > 30000) syncNow(); // 回到页面时拉一下别的设备的进度
+  });
   route();
+  if (syncOn()) syncNow(); else setSync('off', '');
 })();
