@@ -48,6 +48,23 @@ git push origin main main:gh-pages
 - 合并规则：记住上次同步时两边一致的版本（base），按 `days[n]`、`exams[key]`、`wrong[id]` 逐条比较；只有一边改了就取那一边，两边都改了同一条就取较新的一边
 - 第三方库（marked、KaTeX、Mermaid）带 SRI 校验，CDN 上的文件被改动时浏览器会拒绝加载
 
+## 同步到 Obsidian 知识库
+`tools/sync_obsidian.js` 从进度仓库拉取 `progress.json`（用本机 git，私有仓库要求本机 git 有权限），写进知识库：
+
+| 知识库文件 | 写什么 |
+|---|---|
+| `MOC/6周学习计划.md` | 网站上完成的天打勾；"进度记录"表填考试分数、是否合格、需要重学的题和笔记（已有手填分数的行不覆盖） |
+| `30-Practice/错题本.md` | 每周标题下的"网站错题"表，在两行 `%%` 标记之间，每次重写；标记外的手写内容不动 |
+| `30-Practice/网站学习进度.md` | 总览、考试、每天的状态和测试分数、错题统计（整篇自动生成） |
+
+然后在知识库里只提交这三个文件。同一份进度重复运行不会产生改动。
+
+```bash
+node tools/sync_obsidian.js
+```
+
+也可以双击 `tools/sync_obsidian.cmd`。常用参数：`--repo 用户名/仓库名`、`--branch 分支`、`--file 导出的进度.json`、`--dry-run`（只看会改什么）、`--no-commit`。
+
 ## 本地预览
 ```bash
 python -m http.server 8000

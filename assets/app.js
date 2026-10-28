@@ -40,12 +40,19 @@
   function plain(md) {
     return String(md || '')
       .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-      .replace(/\*\*|__|`/g, '')
+      .replace(/\*\*|`/g, '') // 不去 __：填空题的空格是 ______
       .replace(/^\s*(>|#+|[-+]|\d+\.)\s+/gm, '')
       .replace(/\s+/g, ' ')
       .trim();
   }
-  function short(md, k) { const s = plain(md); return s.length > k ? s.slice(0, k) + '…' : s; }
+  // 截断时不把 $…$ 公式截成半个
+  function short(md, k) {
+    let s = plain(md);
+    if (s.length <= k) return s;
+    s = s.slice(0, k);
+    if ((s.match(/\$/g) || []).length % 2) s = s.slice(0, s.lastIndexOf('$'));
+    return s.trimEnd() + '…';
+  }
 
   function toast(msg) {
     const t = $('#toast');
