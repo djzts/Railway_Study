@@ -22,7 +22,8 @@ const USAGE = `把学习网站的进度同步进 Obsidian 知识库。
   --file 进度.json       不拉仓库，直接读这个文件
   --vault 路径           知识库路径（默认 F:\\Obsidian_vault\\Train_dispatch\\Train_dispatch）
   --dry-run              只显示会改什么，不写文件
-  --no-commit            写文件，但不在知识库里提交`;
+  --no-commit            写文件，但不在知识库里提交
+  --log 文件             输出同时追加到这个日志文件（计划任务用）`;
 
 const fs = require('fs');
 const path = require('path');
@@ -297,6 +298,21 @@ function readText(file) {
   return { lines: raw.split(/\r?\n/), eol: raw.includes('\r\n') ? '\r\n' : '\n', raw };
 }
 
+// 计划任务在后台运行，看不到窗口：把输出同时追加到日志文件（超过 200 KB 只留后一半）
+function startLog(file) {
+  file = path.resolve(file);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (fs.existsSync(file) && fs.statSync(file).size > 200 * 1024) {
+    const old = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, old.slice(old.indexOf('\n', old.length / 2) + 1), 'utf8');
+  }
+  fs.appendFileSync(file, `\n[${stamp(new Date())}]\n`, 'utf8');
+  ['log', 'error'].forEach(k => {
+    const orig = console[k].bind(console);
+    console[k] = (...args) => { orig(...args); fs.appendFileSync(file, args.join(' ') + '\n', 'utf8'); };
+  });
+}
+
 function main() {
   const opt = Object.assign({ dryRun: false, commit: true }, DEFAULTS);
   const argv = process.argv.slice(2);
@@ -304,6 +320,7 @@ function main() {
     const a = argv[i];
     if (a === '--dry-run') opt.dryRun = true;
     else if (a === '--no-commit') opt.commit = false;
+    else if (a === '--log' && argv[i + 1] != null) startLog(argv[++i]);
     else if (['--repo', '--branch', '--path', '--file', '--vault'].includes(a) && argv[i + 1] != null) opt[a.slice(2)] = argv[++i];
     else if (a === '-h' || a === '--help') { console.log(USAGE); return; }
     else throw new Error('不认识的参数：' + a + '\n\n' + USAGE);

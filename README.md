@@ -65,6 +65,8 @@ node tools/sync_obsidian.js
 
 也可以双击 `tools/sync_obsidian.cmd`。常用参数：`--repo 用户名/仓库名`、`--branch 分支`、`--file 导出的进度.json`、`--dry-run`（只看会改什么）、`--no-commit`。
 
+本机已经设了 Windows 计划任务"Railway_Study 同步到 Obsidian"：每晚 23:30 在后台运行，错过了（关机或睡眠）就在下次开机后补跑；输出写到 `.progress/sync.log`。
+
 ## 本地预览
 ```bash
 python -m http.server 8000
